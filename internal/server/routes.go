@@ -3,9 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-
+	"os"
 	"strings"
 	"time"
 
@@ -22,136 +21,127 @@ func (s *FiberServer) HelloWorldHandler(c *fiber.Ctx) error {
 	resp := fiber.Map{
 		"message": "Hello World",
 	}
-
 	return c.JSON(resp)
 }
 
-func (s *FiberServer) DefaultOhlcvHandler(c *fiber.Ctx) error {
-	println("DefaultOhlcvHandler match")
-	token := "BTC"
-	tokenAddresses := map[string]string{
-		"BTC": "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9",
-		"ETH": "0x2170Ed0880ac9A755fd29B268",
-	}
+type OHLCVData struct {
+	TimePeriodStart string  `json:"time_period_start"`
+	TimePeriodEnd   string  `json:"time_period_end"`
+	TimeOpen        string  `json:"time_open"`
+	TimeClose       string  `json:"time_close"`
+	PriceOpen       float64 `json:"price_open"`
+	PriceHigh       float64 `json:"price_high"`
+	PriceLow        float64 `json:"price_low"`
+	PriceClose      float64 `json:"price_close"`
+	VolumeTraded    float64 `json:"volume_traded"`
+	TradesCount     int     `json:"trades_count"`
+}
 
-	address, exists := tokenAddresses[token]
-	if !exists {
-		return c.Status(400).SendString("Invalid token")
+func (s *FiberServer) DefaultOhlcvHandler(c *fiber.Ctx) error {
+	apiKey := os.Getenv("API_KEY")
+	url := "https://rest.coinapi.io/v1/ohlcv/BITSTAMP_SPOT_BTC_USD/latest?period_id=5MIN"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return c.Status(500).SendString(err.Error())
 	}
+	req.Header.Set("X-CoinAPI-Key", apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("https://api.syve.ai/v1/price/historical/ohlc?token_address=%s&price_type=price_token_usd_tick_1&pool_address=all", address)
-	log.Printf("Making API request to: %s", url)
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error making API request: %v", err)
 		return c.Status(500).SendString(err.Error())
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("API responded with status code: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
 		return c.Status(500).SendString(fmt.Sprintf("API responded with status code: %d", resp.StatusCode))
 	}
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var ohlcvData []OHLCVData
+	if err := json.NewDecoder(resp.Body).Decode(&ohlcvData); err != nil {
 		return c.Status(500).SendString(err.Error())
 	}
 
-	data, ok := result["data"].([]interface{})
-	if !ok {
-		return c.Status(500).SendString("Invalid data format")
+	resFormatted := make([][]interface{}, len(ohlcvData))
+	volArr := make([]float64, len(ohlcvData))
+	for i, data := range ohlcvData {
+		resFormatted[i] = []interface{}{
+			data.TimePeriodStart,
+			[]float64{
+				data.PriceOpen,
+				data.PriceHigh,
+				data.PriceLow,
+				data.PriceClose,
+			},
+		}
+		volArr[i] = data.VolumeTraded
 	}
 
-	formattedData := make([][]interface{}, len(data))
-	for i, entry := range data {
-		entryMap, ok := entry.(map[string]interface{})
-		if !ok {
-			return c.Status(500).SendString("Invalid data format")
-		}
-
-		timestamp, ok := entryMap["timestamp_open"].(float64)
-		if !ok {
-			return c.Status(500).SendString("Invalid timestamp format")
-		}
-
-		ohlc := []float64{
-			entryMap["price_open"].(float64),
-			entryMap["price_high"].(float64),
-			entryMap["price_low"].(float64),
-			entryMap["price_close"].(float64),
-		}
-
-		formattedData[i] = []interface{}{int64(timestamp), ohlc}
-	}
-
-	// Return the formatted data as JSON response
 	return c.JSON(fiber.Map{
-		"data": formattedData,
+		"formattedOhlc": resFormatted,
+		"volArr":        volArr,
+		"tokenName":     "BTC",
+		"interval":      "5MIN",
 	})
 }
 
 func (s *FiberServer) OhlcvHandler(c *fiber.Ctx) error {
-	println("OhlcvHandler match")
-	tokenAddresses := map[string]string{
-		"BTC": "TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9",
-		"ETH": "0x2170Ed0880ac9A755fd29B268",
-	}
-
 	token := strings.ToUpper(c.Params("token"))
-	address, exists := tokenAddresses[token]
-	if !exists {
+	interval := c.Params("interval")
+
+	symbolID := ""
+	switch token {
+	case "BTC":
+		symbolID = "BITSTAMP_SPOT_BTC_USD"
+	case "ETH":
+		symbolID = "BITSTAMP_SPOT_ETH_USD"
+	default:
 		return c.Status(400).SendString("Invalid token")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("https://api.syve.ai/v1/price/historical/ohlc?token_address=%s&price_type=price_token_usd_tick_1&pool_address=all", address)
-	resp, err := client.Get(url)
+	apiKey := os.Getenv("API_KEY")
+	url := fmt.Sprintf("https://rest.coinapi.io/v1/ohlcv/%s/latest?period_id=%s", symbolID, interval)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Printf("Error making API request: %v", err)
+		return c.Status(500).SendString(err.Error())
+	}
+	req.Header.Set("X-CoinAPI-Key", apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
 		return c.Status(500).SendString(err.Error())
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("API responded with status code: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
 		return c.Status(500).SendString(fmt.Sprintf("API responded with status code: %d", resp.StatusCode))
 	}
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var ohlcvData []OHLCVData
+	if err := json.NewDecoder(resp.Body).Decode(&ohlcvData); err != nil {
 		return c.Status(500).SendString(err.Error())
 	}
 
-	data, ok := result["data"].([]interface{})
-	if !ok {
-		return c.Status(500).SendString("Invalid data format")
-	}
-
-	formattedData := make([][]interface{}, len(data))
-	for i, entry := range data {
-		entryMap, ok := entry.(map[string]interface{})
-		if !ok {
-			return c.Status(500).SendString("Invalid data format")
+	resFormatted := make([][]interface{}, len(ohlcvData))
+	volArr := make([]float64, len(ohlcvData))
+	for i, data := range ohlcvData {
+		resFormatted[i] = []interface{}{
+			data.TimePeriodStart,
+			[]float64{
+				data.PriceOpen,
+				data.PriceHigh,
+				data.PriceLow,
+				data.PriceClose,
+			},
 		}
-
-		timestamp, ok := entryMap["timestamp_open"].(float64)
-		if !ok {
-			return c.Status(500).SendString("Invalid timestamp format")
-		}
-
-		ohlc := []float64{
-			entryMap["price_open"].(float64),
-			entryMap["price_high"].(float64),
-			entryMap["price_low"].(float64),
-			entryMap["price_close"].(float64),
-		}
-
-		formattedData[i] = []interface{}{int64(timestamp), ohlc}
+		volArr[i] = data.VolumeTraded
 	}
 
 	return c.JSON(fiber.Map{
-		"data": formattedData,
+		"formattedOhlc": resFormatted,
+		"volArr":        volArr,
+		"tokenName":     token,
+		"interval":      interval,
 	})
 }
