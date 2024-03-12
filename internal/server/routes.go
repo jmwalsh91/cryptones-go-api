@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"strings"
@@ -40,24 +41,24 @@ func (s *FiberServer) DefaultOhlcvHandler(c *fiber.Ctx) error {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	url := fmt.Sprintf("https://api.syve.ai/v1/price/historical/ohlc?token_address=%s&price_type=price_token_usd_tick_1&pool_address=all", address)
+	log.Printf("Making API request to: %s", url)
 	resp, err := client.Get(url)
 	if err != nil {
+		log.Printf("Error making API request: %v", err)
 		return c.Status(500).SendString(err.Error())
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("API responded with status code: %d", resp.StatusCode)
 		return c.Status(500).SendString(fmt.Sprintf("API responded with status code: %d", resp.StatusCode))
 	}
 
-	// Parse the response JSON
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return c.Status(500).SendString(err.Error())
 	}
 
-	// Extract and reshape the data
 	data, ok := result["data"].([]interface{})
 	if !ok {
 		return c.Status(500).SendString("Invalid data format")
@@ -108,11 +109,13 @@ func (s *FiberServer) OhlcvHandler(c *fiber.Ctx) error {
 	url := fmt.Sprintf("https://api.syve.ai/v1/price/historical/ohlc?token_address=%s&price_type=price_token_usd_tick_1&pool_address=all", address)
 	resp, err := client.Get(url)
 	if err != nil {
+		log.Printf("Error making API request: %v", err)
 		return c.Status(500).SendString(err.Error())
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("API responded with status code: %d", resp.StatusCode)
 		return c.Status(500).SendString(fmt.Sprintf("API responded with status code: %d", resp.StatusCode))
 	}
 
